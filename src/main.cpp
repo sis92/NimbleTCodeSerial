@@ -18,14 +18,16 @@ void pressHandler(BfButton *btn, BfButton::press_pattern_t pattern)
     {
     case BfButton::SINGLE_PRESS:
         nimble.toggle();
-        if (!nimble.isRunning()) nimble.resetState();
+        if (!nimble.isRunning())
+            nimble.resetState();
         break;
     }
 }
 
 void logTimer()
 {
-    if (!logDelay.justFinished()) return;
+    if (!logDelay.justFinished())
+        return;
     logDelay.repeat();
 
     nimble.printFrameState();
@@ -33,7 +35,8 @@ void logTimer()
 
 void updateLEDs()
 {
-    if (!ledUpdateDelay.justFinished()) return;
+    if (!ledUpdateDelay.justFinished())
+        return;
     ledUpdateDelay.repeat();
 
     nimble.updateEncoderLEDs();
@@ -45,7 +48,8 @@ void setup()
 {
     // NimbleStroker TCode setup
     nimble.init();
-    while (!Serial);
+    while (!Serial)
+        ;
 
 #ifdef DEBUG
     Serial.setDebugOutput(true);
@@ -66,9 +70,9 @@ void setup()
 void loop()
 {
     btn.read();
-    while (Serial.available() > 0) {
-        nimble.inputByte(Serial.read());
-    }
+    
+    readFromPend();
+    nimble.readFromSerial();
     nimble.updateActuator();
     updateLEDs();
 #ifdef DEBUG

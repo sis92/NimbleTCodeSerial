@@ -213,13 +213,13 @@ void ledPositionPulse(short int position, bool isOn)
         }
     }
 
-    ledcWrite(ENC_LED_N,  ledState1);
+    ledcWrite(ENC_LED_N, ledState1);
     ledcWrite(ENC_LED_SE, ledState1);
     ledcWrite(ENC_LED_SW, ledState1);
 
     ledcWrite(ENC_LED_NE, ledState2);
     ledcWrite(ENC_LED_NW, ledState2);
-    ledcWrite(ENC_LED_S,  ledState2);
+    ledcWrite(ENC_LED_S, ledState2);
 
     ledcWrite(ENC_LED_W, 0);
     ledcWrite(ENC_LED_E, 0);
@@ -265,6 +265,43 @@ void sendToAct()
     for (byte i = 0; i <= 6; i++)
     {
         actSerial.write(outgoingPacket[i]);
+    }
+}
+
+void sendToPend()
+{
+    // Passthe feedback from actor to the pendant
+    byte outgoingPacket[7], statusByte = 0;
+    bool positionNegative = 0;
+    int checkWord;
+    if (pendant.positionFeedback < 0)
+    {
+        pendant.positionFeedback *= -1;
+        positionNegative = 1;
+    }
+    else
+        positionNegative = 0;
+    statusByte |= pendant.activated;
+    statusByte |= pendant.airOut << 1;
+    statusByte |= pendant.airIn << 2;
+    statusByte |= 0x80; // SYSTEM_TYPE: NimbleStroker
+
+    outgoingPacket[0] = statusByte;
+    outgoingPacket[1] = pendant.positionFeedback & 0xFF;
+    outgoingPacket[2] = pendant.positionFeedback >> 8;
+    outgoingPacket[2] |= positionNegative << 2;
+    outgoingPacket[3] = pendant.forceFeedback & 0xFF;
+    outgoingPacket[4] = pendant.forceFeedback >> 8;
+    checkWord = 0;
+    for (byte i = 0; i <= 4; i++)
+    {
+        checkWord += outgoingPacket[i];
+    }
+    outgoingPacket[5] = checkWord & 0x00FF;
+    outgoingPacket[6] = checkWord >> 8;
+    for (byte i = 0; i <= 6; i++)
+    {
+        pendSerial.write(outgoingPacket[i]);
     }
 }
 

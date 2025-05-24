@@ -6,48 +6,80 @@
 #define VIBRATION_MAX_AMP 25
 #define VIBRATION_MAX_SPEED 20.0 // hz
 
-struct nimbleFrameState {
-    int16_t targetPos = 0; // target position from tcode commands
-    int16_t position = 0; // next position to send to actuator (-1000 to 1000)
-    int16_t lastPos = 0; // previous frame's position
+struct nimbleFrameState
+{
+    int16_t targetPos = 0;      // target position from tcode commands
+    int16_t position = 0;       // next position to send to actuator (-1000 to 1000)
+    int16_t lastPos = 0;        // previous frame's position
     int16_t force = IDLE_FORCE; // next force value to send to actuator (0 to 1023)
-    int8_t air = 0; // next air state to send to actuator (-1 = air out, 0 = stop, 1 = air in)
-    int16_t vibrationPos = 0; // next vibration position
+    int8_t air = 0;             // next air state to send to actuator (-1 = air out, 0 = stop, 1 = air in)
+    int16_t vibrationPos = 0;   // next vibration position
 };
 
-class NimbleTCode {
-    public:
-        NimbleTCode(const String &firmware) { tcode = new TCode<3>(firmware); }
-        ~NimbleTCode() { delete tcode; }
-        void init();
-        void resetState();
-        void start() { running = true; }
-        void stop() { tcode->stop(); running = false; }
-        void toggle() { if (running) stop(); else start(); }
-        void inputByte(byte input) { tcode->inputByte(input); }
-        void updateActuator();
-        void updateEncoderLEDs(bool isOn = true);
-        void updateHardwareLEDs();
-        void updateNetworkLEDs(uint32_t bluetooth, uint32_t wifi);
-        void setVibrationSpeed(float v) { vibrationSpeed = min(max(v, (float)0), (float)VIBRATION_MAX_SPEED); }
-        void setVibrationAmplitude(uint16_t v) { vibrationAmplitude = min(max(v, (uint16_t)0), (uint16_t)VIBRATION_MAX_AMP); }
-        void printFrameState(Print& out = Serial);
-        bool isRunning() { return running; }
-        void setMessageCallback(TCODE_FUNCTION_PTR_T function) { tcode->setMessageCallback(function); }
+class NimbleTCode
+{
+public:
+    NimbleTCode(const String &firmware) { tcode = new TCode<3>(firmware); }
+    ~NimbleTCode() { delete tcode; }
+    void init();
+    void resetState();
+    void start()
+    {
+        running = true;
+        pendant.tempLimiting = false;
+        pendant.sensorFault = false;
+        sendToPend();
+    }
+    void stop()
+    {
+        tcode->stop();
+        // Try to stop the actuator
+        pendant.tempLimiting = true;
+        pendant.sensorFault = true;
+        sendToPend();
+        running = false;
+    }
+    void toggle()
+    {
+        if (running)
+            stop();
+        else
+            start();
+    }
+    void readFromSerial()
+    {
+        while (Serial.available() > 0)
+        {
+            tcode->inputByte(Serial.read());
+            lastSerialMillis = millis();
+        }
+    }
+    void updateActuator();
+    void updateEncoderLEDs(bool isOn = true);
+    void updateHardwareLEDs();
+    void updateNetworkLEDs(uint32_t bluetooth, uint32_t wifi);
+    void setVibrationSpeed(float v) { vibrationSpeed = min(max(v, (float)0), (float)VIBRATION_MAX_SPEED); }
+    void setVibrationAmplitude(uint16_t v) { vibrationAmplitude = min(max(v, (uint16_t)0), (uint16_t)VIBRATION_MAX_AMP); }
+    void printFrameState(Print &out = Serial);
+    bool isRunning() { return running; }
+    void setMessageCallback(TCODE_FUNCTION_PTR_T function) { tcode->setMessageCallback(function); }
 
-    private:
-        TCode<3> *tcode;
-        bool running = true;
-        float vibrationSpeed = VIBRATION_MAX_SPEED; // hz
-        uint16_t vibrationAmplitude = 0; // amplitude in position units (0 to 25)
-        nimbleFrameState frame;
+private:
+    unsigned long lastSerialMillis = 0;
+    unsigned long MAX_SILENT_TIME = 2000; // ms
 
-        void handleAxisChanges();
-        void handleVibrationSpeedChanges();
-        void handlePositionChanges();
-        void handleAirChanges();
-        void handleForceChanges();
-        int16_t clampPositionDelta();
+    TCode<3> *tcode;
+    bool running = true;
+    float vibrationSpeed = VIBRATION_MAX_SPEED; // hz
+    uint16_t vibrationAmplitude = 0;            // amplitude in position units (0 to 25)
+    nimbleFrameState frame;
+
+    void handleAxisChanges();
+    void handleVibrationSpeedChanges();
+    void handlePositionChanges();
+    void handleAirChanges();
+    void handleForceChanges();
+    int16_t clampPositionDelta();
 };
 
 void NimbleTCode::init()
@@ -57,7 +89,7 @@ void NimbleTCode::init()
 
     tcode->init();
 
-    tcode->axisRegister("L0", F("Up")); // Up stroke position
+    tcode->axisRegister("L0", F("Up"));   // Up stroke position
     tcode->axisWrite("L0", 5000, ' ', 0); // 5000: midpoint
     tcode->axisEasingType("L0", EasingType::EASEINOUT);
 
@@ -65,7 +97,7 @@ void NimbleTCode::init()
     tcode->axisWrite("V0", 0, ' ', 0);    // 0: vibration off
     tcode->axisEasingType("V0", EasingType::EASEINOUT);
 
-    tcode->axisRegister("A0", F("Air")); // Air in/out valve
+    tcode->axisRegister("A0", F("Air"));  // Air in/out valve
     tcode->axisWrite("A0", 5000, ' ', 0); // 0: air out, 5000: stop, 9999: air in
 
     tcode->axisRegister("A1", F("Force"));
@@ -75,7 +107,8 @@ void NimbleTCode::init()
     tcode->axisWrite("A2", 9999, ' ', 0); // 9999: max vibration speed
 }
 
-void NimbleTCode::resetState() {
+void NimbleTCode::resetState()
+{
     frame.targetPos = 0;
     frame.force = MAX_FORCE;
     frame.air = 0;
@@ -93,7 +126,8 @@ void NimbleTCode::handleAxisChanges()
 
 void NimbleTCode::handleVibrationSpeedChanges()
 {
-    if (!tcode->axisChanged("A2")) return;
+    if (!tcode->axisChanged("A2"))
+        return;
     int val = tcode->axisRead("A2");
     int maxSpeed = VIBRATION_MAX_SPEED * 100;
     int newSpeed = map(val, 0, 9999, 0, maxSpeed);
@@ -102,23 +136,28 @@ void NimbleTCode::handleVibrationSpeedChanges()
 
 void NimbleTCode::handlePositionChanges()
 {
-    if (!tcode->axisChanged("L0")) {
+    if (!tcode->axisChanged("L0"))
+    {
         int val = tcode->axisRead("L0");
         frame.targetPos = map(val, 0, 9999, -ACTUATOR_MAX_POS, ACTUATOR_MAX_POS);
     }
 
-    if (this->tcode->axisChanged("V0")) {
+    if (this->tcode->axisChanged("V0"))
+    {
         int val = tcode->axisRead("V0");
         vibrationAmplitude = map(val, 0, 9999, 0, VIBRATION_MAX_AMP);
     }
 
-    if (vibrationAmplitude > 0 && vibrationSpeed > 0) {
+    if (vibrationAmplitude > 0 && vibrationSpeed > 0)
+    {
         int vibSpeedMillis = 1000 / vibrationSpeed;
         int vibModMillis = millis() % vibSpeedMillis;
         float tempPos = float(vibModMillis) / vibSpeedMillis;
         int vibWaveDeg = tempPos * 360;
         frame.vibrationPos = round(sin(radians(vibWaveDeg)) * vibrationAmplitude);
-    } else {
+    }
+    else
+    {
         frame.vibrationPos = 0;
     }
     // Serial.printf("A:%5d S:%0.2f P:%5d\n",
@@ -128,9 +167,12 @@ void NimbleTCode::handlePositionChanges()
     // );
 
     int targetPosTmp = frame.targetPos;
-    if (frame.targetPos - vibrationAmplitude < -ACTUATOR_MAX_POS) {
+    if (frame.targetPos - vibrationAmplitude < -ACTUATOR_MAX_POS)
+    {
         targetPosTmp = frame.targetPos + vibrationAmplitude;
-    } else if (frame.targetPos + vibrationAmplitude > ACTUATOR_MAX_POS) {
+    }
+    else if (frame.targetPos + vibrationAmplitude > ACTUATOR_MAX_POS)
+    {
         targetPosTmp = frame.targetPos - vibrationAmplitude;
     }
     frame.position = targetPosTmp + frame.vibrationPos;
@@ -138,62 +180,95 @@ void NimbleTCode::handlePositionChanges()
 
 void NimbleTCode::handleAirChanges()
 {
-    if (!tcode->axisChanged("A0")) return;
+    if (!tcode->axisChanged("A0"))
+        return;
     int val = tcode->axisRead("A0");
 
-    //    0-3333 = air out 
+    //    0-3333 = air out
     // 3334-6666 = valve off
     // 6667-9999 = air in
-    if (val < 3334) {
+    if (val < 3334)
+    {
         frame.air = -1;
-    } else if (val > 6666) {
+    }
+    else if (val > 6666)
+    {
         frame.air = 1;
-    } else {
+    }
+    else
+    {
         frame.air = 0;
     }
 }
 
 void NimbleTCode::handleForceChanges()
 {
-    if (!tcode->axisChanged("A1")) return;
+    if (!tcode->axisChanged("A1"))
+        return;
     int val = tcode->axisRead("A1");
     frame.force = map(val, 0, 9999, 0, MAX_FORCE);
 }
 
 void NimbleTCode::updateActuator()
 {
+
     handleAxisChanges();
     // Send packet of values to the actuator when time is ready
     if (checkTimer())
     {
-        if (isRunning()) {
+        readFromAct();
+        bool is_silent = millis() - lastSerialMillis > MAX_SILENT_TIME;
+
+        if (is_silent && pendant.activated && pendant.present)
+        {
+            // Overwrite the last position with the current position
+            frame.position = pendant.positionCommand;
+            frame.force = pendant.forceCommand;
+            frame.air = pendant.airIn ? 1 : (pendant.airOut ? -1 : 0);
+        }
+
+        if (isRunning())
+        {
             frame.lastPos = clampPositionDelta();
             actuator.positionCommand = frame.lastPos;
             actuator.forceCommand = frame.force;
             actuator.airIn = (frame.air > 0);
             actuator.airOut = (frame.air < 0);
-        } else {
+
+            if (pendant.activated && pendant.present)
+            {
+                actuator.airIn |= pendant.airIn;
+                actuator.airOut |= pendant.airOut;
+            }
+        }
+        else
+        {
             actuator.airIn = false;
             actuator.airOut = false;
             actuator.forceCommand = IDLE_FORCE;
         }
         sendToAct();
-    }
 
-    if (readFromAct()) // Read current state from actuator.
-    { // If the function returns true, the values were updated.
+        // if (readFromAct()) // Read current state from actuator.
+        // {                  // If the function returns true, the values were updated.
 
-        // Unclear yet if any action is required when tempLimiting is occurring.
-        // A comparison is needed with the Pendant behavior.
-        // if (actuator.tempLimiting) {
-        //     setRunMode(RUN_MODE_OFF);
+        //     if (actuator.tempLimiting)
+        //     {
+        //         stop();
+        //         actuator.airIn = false;
+        //         actuator.airOut = false;
+        //         actuator.forceCommand = IDLE_FORCE;
+        //         pendant.tempLimiting = true;
+        //     }
+        //     if (actuator.sensorFault)
+        //     {
+        //         stop();
+        //         actuator.airIn = false;
+        //         actuator.airOut = false;
+        //         actuator.forceCommand = IDLE_FORCE;
+        //         pendant.sensorFault = true;
+        //     }
         // }
-
-        // Serial.printf("A P:%4d F:%4d T:%s\n",
-        //     actuator.positionFeedback,
-        //     actuator.forceFeedback,
-        //     actuator.tempLimiting ? "true" : "false"
-        // );
     }
 }
 
@@ -211,26 +286,32 @@ void NimbleTCode::updateEncoderLEDs(bool isOn)
 
     if (isOn)
     {
-        if (pos < 0) {
+        if (pos < 0)
+        {
             ledState1 = ledScale;
-        } else if (pos > 0) {
+        }
+        else if (pos > 0)
+        {
             ledState2 = ledScale;
         }
 
-        if (vibPos < 0) {
+        if (vibPos < 0)
+        {
             vibState1 = vibScale;
-        } else if (vibPos > 0) {
+        }
+        else if (vibPos > 0)
+        {
             vibState2 = vibScale;
         }
     }
 
-    ledcWrite(ENC_LED_N,  ledState1);
+    ledcWrite(ENC_LED_N, ledState1);
     ledcWrite(ENC_LED_SE, ledState1);
     ledcWrite(ENC_LED_SW, ledState1);
 
     ledcWrite(ENC_LED_NE, ledState2);
     ledcWrite(ENC_LED_NW, ledState2);
-    ledcWrite(ENC_LED_S,  ledState2);
+    ledcWrite(ENC_LED_S, ledState2);
 
     ledcWrite(ENC_LED_W, vibState1);
     ledcWrite(ENC_LED_E, vibState2);
@@ -251,14 +332,17 @@ void NimbleTCode::updateNetworkLEDs(uint32_t bluetooth, uint32_t wifi)
 int16_t NimbleTCode::clampPositionDelta()
 {
     int16_t delta = frame.position - frame.lastPos;
-    if (delta >= 0) {
+    if (delta >= 0)
+    {
         return (delta > MAX_POSITION_DELTA) ? frame.lastPos + MAX_POSITION_DELTA : frame.position;
-    } else {
+    }
+    else
+    {
         return (delta < -MAX_POSITION_DELTA) ? frame.lastPos - MAX_POSITION_DELTA : frame.position;
     }
 }
 
-void NimbleTCode::printFrameState(Print& out)
+void NimbleTCode::printFrameState(Print &out)
 {
     out.printf("------------------\n");
     out.printf("   VibAmp: %5d\n", vibrationAmplitude);
